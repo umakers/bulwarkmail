@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.; [warn] Functions should have comments: getNextSelectedEmail, annotateScheduledEmails, annotateScheduledEmail, shouldClearPendingUndoSend, resolveActionClient, resolveActionMailboxes, resolveAllMailJmapIds, buildAllMailFilter, …
 import { create } from "zustand";
 import { Email, Mailbox, StateChange, ScheduledEmail, SendEmailResult, ALL_MAIL_MAILBOX_ID, isUnifiedMailboxId, isCrossViewId } from "@/lib/jmap/types";
 import type { UnifiedMailboxRole, CrossView } from "@/lib/jmap/types";
@@ -185,6 +186,10 @@ interface EmailStore {
   batchDelete: (client: IJMAPClient, permanent?: boolean) => Promise<void>;
   batchMoveToMailbox: (client: IJMAPClient, mailboxId: string) => Promise<void>;
   batchArchive: (client: IJMAPClient) => Promise<void>;
+  // Apply (color === value) or clear (color === null) label/color tags across
+  // all selected emails. Adds the tag to every selection; null removes every
+  // label/color tag from every selection.
+  batchSetColorTag: (client: IJMAPClient, color: string | null) => Promise<void>;
 
   // Spam operations
   // For unified-view emails the undo must hit the same account: `accountId` is the
@@ -2276,6 +2281,83 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
       set({
         error: error instanceof Error ? error.message : "Failed to move emails",
         isLoading: false
+      });
+    }
+  },
+
+  batchSetColorTag: async (client, color) => {
+    const { selectedEmailIds, emails } = get();
+    if (selectedEmailIds.size === 0) return;
+
+    // Compute the full keywords object each selected email should end up with.
+    // color === null clears every label/color tag; otherwise the tag is added
+    // to all selected emails (apply-to-all, mirroring the "Move to" batch flow)
+    // without disturbing unrelated keywords.
+    const computeKeywords = (email: Email): Record<string, boolean> => {
+      const keywords = { ...(email.keywords || {}) };
+      if (color === null) {
+        Object.keys(keywords).forEach(key => {
+          if (key.startsWith("$label:") || key.startsWith("$color:")) {
+            keywords[key] = false;
+          }
+        });
+      } else {
+        keywords[`$label:${color}`] = true;
+      }
+      return keywords;
+    };
+
+    const selected = emails.filter(e => selectedEmailIds.has(e.id));
+    if (selected.length === 0) return;
+
+    set({ isLoading: true, error: null });
+    try {
+      if (get().isUnifiedView) {
+        // Group by owning JMAP account; dispatch through the reaching login client
+        // so tags on shared/group-mailbox messages land on the right account. (#281)
+        const bySource = new Map<string, { clientAccountId?: string; updates: Record<string, Record<string, boolean>> }>();
+        for (const email of selected) {
+          const key = email.sourceAccountId || '__default__';
+          if (!bySource.has(key)) bySource.set(key, { clientAccountId: email.sourceClientAccountId, updates: {} });
+          bySource.get(key)!.updates[email.id] = computeKeywords(email);
+        }
+
+        const promises = Array.from(bySource.entries()).map(async ([sourceAccountId, { clientAccountId, updates }]) => {
+          const acctClient = sourceAccountId === '__default__'
+            ? resolveActionClient(client)
+            : (clientAccountId ? useAuthStore.getState().getClientForAccount(clientAccountId) : undefined);
+          if (!acctClient) return;
+          const jmapAccountId = sourceAccountId === '__default__' ? undefined : sourceAccountId;
+          await acctClient.batchUpdateEmailKeywords(updates, jmapAccountId);
+        });
+        await Promise.allSettled(promises);
+      } else {
+        const updates: Record<string, Record<string, boolean>> = {};
+        for (const email of selected) {
+          updates[email.id] = computeKeywords(email);
+        }
+        await resolveActionClient(client).batchUpdateEmailKeywords(updates);
+      }
+
+      // Patch emails in place so the list keeps its scroll/pagination state.
+      const updatedEmails = emails.map(email =>
+        selectedEmailIds.has(email.id)
+          ? { ...email, keywords: computeKeywords(email) }
+          : email
+      );
+
+      set({
+        emails: updatedEmails,
+        selectedEmailIds: new Set(),
+        isLoading: false,
+      });
+
+      // Refresh tag badge counts to reflect the new assignments.
+      await get().fetchTagCounts(client);
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : "Failed to update tags",
+        isLoading: false,
       });
     }
   },

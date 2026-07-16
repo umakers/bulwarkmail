@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.; [warn] Functions should have comments: constructor, isTaskObject, getUserTimeZone, cleanRecurrenceRules, getCalendarEventDebugSnapshot, namespaceMailboxIds, computeHasMore, hasSubmissionMethod, …
 import type { Email, Mailbox, StateChange, AccountStates, Thread, Identity, EmailAddress, ContactCard, AddressBook, AddressBookRights, VacationResponse, Calendar, CalendarRights, CalendarEvent, CalendarEventFilter, CalendarTask, FileNode, FileNodeFilter, FileNodeRights, Principal, PushSubscription, EmailSubmission, ScheduledEmail, SendEmailResult, SharedAccount } from "./types";
 import type { SieveScript, SieveCapabilities } from "./sieve-types";
 import type { IJMAPClient } from "./client-interface";
@@ -1392,6 +1393,25 @@ export class JMAPClient implements IJMAPClient {
             keywords,
           },
         },
+      }, "0"],
+    ]);
+  }
+
+  async batchUpdateEmailKeywords(
+    updates: Record<string, Record<string, boolean>>,
+    accountId?: string,
+  ): Promise<void> {
+    const emailIds = Object.keys(updates);
+    if (emailIds.length === 0) return;
+    // One Email/set call patches every selected email's keywords atomically.
+    const update: Record<string, { keywords: Record<string, boolean> }> = {};
+    for (const emailId of emailIds) {
+      update[emailId] = { keywords: updates[emailId] };
+    }
+    await this.request([
+      ["Email/set", {
+        accountId: accountId || this.accountId,
+        update,
       }, "0"],
     ]);
   }

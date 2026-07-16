@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.
 import type { Email, Mailbox, StateChange, AccountStates, Thread, Identity, EmailAddress, ContactCard, AddressBook, AddressBookRights, VacationResponse, Calendar, CalendarRights, CalendarEvent, CalendarEventFilter, CalendarTask, FileNode, FileNodeRights, Principal, PushSubscription, ScheduledEmail, SendEmailResult, SharedAccount } from "./types";
 import type { SieveScript, SieveCapabilities } from "./sieve-types";
 
@@ -105,6 +106,9 @@ export interface IJMAPClient {
   batchMarkAsRead(emailIds: string[], read?: boolean, accountId?: string): Promise<void>;
   toggleStar(emailId: string, starred: boolean, accountId?: string): Promise<void>;
   updateEmailKeywords(emailId: string, keywords: Record<string, boolean>, accountId?: string): Promise<void>;
+  // Apply a full keywords object to many emails in a single Email/set call.
+  // `updates` maps emailId -> the complete keywords record to persist.
+  batchUpdateEmailKeywords(updates: Record<string, Record<string, boolean>>, accountId?: string): Promise<void>;
   setKeyword(emailId: string, keyword: string, accountId?: string): Promise<void>;
   migrateKeyword(oldKeyword: string, newKeyword: string): Promise<number>;
   deleteEmail(emailId: string, accountId?: string): Promise<void>;

@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.; [warn] Functions should have comments: EmailList, LoadingSkeleton, handleBatchMarkAsRead, handleBatchDelete, handleEmptyFolder
 "use client";
 
 import { Email, ThreadGroup } from "@/lib/jmap/types";
@@ -89,6 +90,7 @@ export function EmailList({
     batchDelete,
     batchMoveToMailbox,
     batchArchive,
+    batchSetColorTag,
     batchMarkAsSpam,
     batchUndoSpam,
     loadMoreEmails,
@@ -575,6 +577,7 @@ export function EmailList({
             }
           }}
           onBatchMoveToMailbox={(mailboxId) => client && batchMoveToMailbox(client, mailboxId)}
+          onBatchSetColorTag={(color) => client && batchSetColorTag(client, color)}
           onBatchMarkAsSpam={async () => {
             if (client) {
               const emailIds = Array.from(selectedEmailIds);

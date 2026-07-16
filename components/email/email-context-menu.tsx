@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.; [warn] Functions should have comments: EmailContextMenu, handleAction, renderNodes
 "use client";
 
 import { useTranslations } from "next-intl";
@@ -77,6 +78,7 @@ interface EmailContextMenuProps {
   onBatchDelete?: () => void;
   onBatchArchive?: () => void;
   onBatchMoveToMailbox?: (mailboxId: string) => void;
+  onBatchSetColorTag?: (color: string | null) => void;
   onBatchMarkAsSpam?: () => void;
   onBatchUndoSpam?: () => void;
 }
@@ -140,6 +142,7 @@ export function EmailContextMenu({
   onBatchDelete,
   onBatchArchive,
   onBatchMoveToMailbox,
+  onBatchSetColorTag,
   onBatchMarkAsSpam,
   onBatchUndoSpam,
   onEditDraft,
@@ -366,7 +369,7 @@ export function EmailContextMenu({
         />
       )}
 
-      {/* Set tag submenu - only for single email */}
+      {/* Set tag submenu - single email: toggle per email with active state */}
       {!showBatchActions && (
         <ContextMenuSubMenu icon={Tag} label={t("color_tag")}>
           {colorOptions.map((option) => {
@@ -399,6 +402,31 @@ export function EmailContextMenu({
               />
             </>
           )}
+        </ContextMenuSubMenu>
+      )}
+
+      {/* Set tag submenu - batch: apply the chosen tag to every selected email,
+          or clear all label/color tags from the whole selection. No per-email
+          active state is shown because the selection can be mixed. */}
+      {showBatchActions && onBatchSetColorTag && (
+        <ContextMenuSubMenu icon={Tag} label={t("color_tag")}>
+          {colorOptions.map((option) => (
+            <button
+              key={option.value}
+              role="menuitem"
+              onClick={() => handleAction(() => onBatchSetColorTag?.(option.value))}
+              className="w-full px-3 py-1.5 text-sm text-start flex items-center gap-2 hover:bg-muted cursor-pointer"
+            >
+              <span className={cn("w-3 h-3 rounded-full flex-shrink-0", option.color)} />
+              <span className="flex-1">{option.name}</span>
+            </button>
+          ))}
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            icon={X}
+            label={t("remove_color")}
+            onClick={() => handleAction(() => onBatchSetColorTag?.(null))}
+          />
         </ContextMenuSubMenu>
       )}
 

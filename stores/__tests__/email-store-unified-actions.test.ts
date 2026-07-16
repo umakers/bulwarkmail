@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.; [warn] Functions should have comments: makeEmail, makeClient
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEmailStore } from '../email-store';
 import { useAuthStore } from '../auth-store';
@@ -54,6 +55,8 @@ function makeClient() {
     toggleStar: vi.fn().mockResolvedValue(undefined),
     moveEmail: vi.fn().mockResolvedValue(undefined),
     batchMarkAsRead: vi.fn().mockResolvedValue(undefined),
+    batchUpdateEmailKeywords: vi.fn().mockResolvedValue(undefined),
+    getTagCounts: vi.fn().mockResolvedValue({}),
   } as unknown as IJMAPClient;
 }
 
@@ -168,6 +171,55 @@ describe('unified-view single-email action routing (#281)', () => {
     expect(s.accountMailboxes['account-b'][0].unreadEmails).toBe(2); // account-b: -1
   });
 
+  it('batchSetColorTag routes each selected email to its own account client and adds the tag', async () => {
+    useEmailStore.setState({
+      emails: [
+        makeEmail({ id: 'a1', sourceClientAccountId: 'account-a', sourceAccountId: 'account-a', keywords: {}, mailboxIds: { inbox: true } }),
+        makeEmail({ id: 'b1', sourceClientAccountId: 'account-b', sourceAccountId: 'account-b', keywords: { '$seen': true }, mailboxIds: { inbox: true } }),
+      ],
+      selectedEmailIds: new Set(['a1', 'b1']),
+    });
+
+    await useEmailStore.getState().batchSetColorTag(activeClient, 'important');
+
+    // account-a email routed through its own client with its owner accountId.
+    expect(activeClient.batchUpdateEmailKeywords).toHaveBeenCalledWith(
+      { a1: { '$label:important': true } },
+      'account-a',
+    );
+    // account-b email routed through its own client with its owner accountId,
+    // preserving unrelated keywords ($seen).
+    expect(accountBClient.batchUpdateEmailKeywords).toHaveBeenCalledWith(
+      { b1: { '$seen': true, '$label:important': true } },
+      'account-b',
+    );
+
+    // Emails patched in place and selection cleared.
+    const s = useEmailStore.getState();
+    expect(s.emails.find(e => e.id === 'a1')?.keywords['$label:important']).toBe(true);
+    expect(s.emails.find(e => e.id === 'b1')?.keywords['$label:important']).toBe(true);
+    expect(s.selectedEmailIds.size).toBe(0);
+  });
+
+  it('batchSetColorTag with null clears all label/color tags across the selection', async () => {
+    useEmailStore.setState({
+      emails: [
+        makeEmail({ id: 'a1', sourceClientAccountId: 'account-a', sourceAccountId: 'account-a', keywords: { '$label:red': true, '$seen': true }, mailboxIds: { inbox: true } }),
+      ],
+      selectedEmailIds: new Set(['a1']),
+    });
+
+    await useEmailStore.getState().batchSetColorTag(activeClient, null);
+
+    expect(activeClient.batchUpdateEmailKeywords).toHaveBeenCalledWith(
+      { a1: { '$label:red': false, '$seen': true } },
+      'account-a',
+    );
+    const s = useEmailStore.getState();
+    expect(s.emails.find(e => e.id === 'a1')?.keywords['$label:red']).toBe(false);
+    expect(s.emails.find(e => e.id === 'a1')?.keywords['$seen']).toBe(true);
+  });
+
   it('routes a shared/group email through the delegating login client + owner accountId', async () => {
     await useEmailStore.getState().markAsRead(activeClient, 'email-shared', true);
     // Reached via account-a's client (the active one), targeting the owner account.
@@ -178,6 +230,25 @@ describe('unified-view single-email action routing (#281)', () => {
   it('stars a shared/group email via the delegating client + owner accountId', async () => {
     await useEmailStore.getState().toggleStar(activeClient, 'email-shared');
     expect(activeClient.toggleStar).toHaveBeenCalledWith('email-shared', true, 'owner-x');
+  });
+
+  it('batchSetColorTag outside unified view sends one call through the passed client', async () => {
+    useEmailStore.setState({
+      isUnifiedView: false,
+      emails: [
+        makeEmail({ id: 'e1', keywords: {}, mailboxIds: { inbox: true } }),
+        makeEmail({ id: 'e2', keywords: {}, mailboxIds: { inbox: true } }),
+      ],
+      selectedEmailIds: new Set(['e1', 'e2']),
+    });
+
+    await useEmailStore.getState().batchSetColorTag(activeClient, 'blue');
+
+    expect(activeClient.batchUpdateEmailKeywords).toHaveBeenCalledWith(
+      { e1: { '$label:blue': true }, e2: { '$label:blue': true } },
+    );
+    expect(accountBClient.batchUpdateEmailKeywords).not.toHaveBeenCalled();
+    expect(useEmailStore.getState().selectedEmailIds.size).toBe(0);
   });
 
   it('still uses the active/passed client outside unified view', async () => {

@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.; [warn] Functions should have comments: constructor, pinRank, scheduleNext
 import type { IJMAPClient } from '@/lib/jmap/client-interface';
 import type { Email, Mailbox, StateChange, AccountStates, Thread, Identity, EmailAddress, ContactCard, AddressBook, VacationResponse, Calendar, CalendarEvent, CalendarEventFilter, CalendarTask, FileNode, ScheduledEmail, SendEmailResult, SharedAccount } from '@/lib/jmap/types';
 import type { SieveScript, SieveCapabilities } from '@/lib/jmap/sieve-types';
@@ -277,6 +278,14 @@ export class DemoJMAPClient implements IJMAPClient {
   async updateEmailKeywords(emailId: string, keywords: Record<string, boolean>): Promise<void> {
     const email = this.data.emails.find(e => e.id === emailId);
     if (email) email.keywords = { ...email.keywords, ...keywords };
+  }
+
+  async batchUpdateEmailKeywords(updates: Record<string, Record<string, boolean>>): Promise<void> {
+    for (const [emailId, keywords] of Object.entries(updates)) {
+      const email = this.data.emails.find(e => e.id === emailId);
+      if (email) email.keywords = { ...email.keywords, ...keywords };
+    }
+    this.recalcMailboxCounts();
   }
 
   async setKeyword(emailId: string, keyword: string): Promise<void> {
