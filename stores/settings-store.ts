@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { useThemeStore } from './theme-store';
 import { useLocaleStore } from './locale-store';
+import { useAccountStore, type AccountEntry } from './account-store';
 import type { NotificationSoundChoice } from '@/lib/notification-sound';
 import { apiFetch } from '@/lib/browser-navigation';
 import {
@@ -28,6 +29,53 @@ let syncTimeout: ReturnType<typeof setTimeout> | null = null;
 let isLoadingFromServer = false;
 
 const SYNC_DEBOUNCE_MS = 2000;
+
+// These are presentation preferences only. They are intentionally kept apart
+// from mail behavior, identities, folders and other account-specific settings.
+const VISUAL_SETTING_KEYS = [
+  'fontSize', 'density', 'animationsEnabled',
+  'dateFormat', 'dateLocale', 'timeFormat', 'firstDayOfWeek',
+  'showPreview', 'mailLayout', 'emailsPerPage', 'attachmentPosition',
+  'emailAlwaysLightMode', 'hoverActions', 'hoverActionsMode', 'hoverActionsCorner',
+  'toolbarPosition', 'showToolbarLabels', 'hideAccountSwitcher', 'showRailAccountList',
+  'disableThreading', 'senderFavicons', 'showAvatarsInJunk',
+  'colorfulSidebarIcons', 'tintListRowsByTag', 'showFolderTotalCount',
+  'hideInlineImageAttachments', 'attachmentImagePreviewsEnabled',
+  'theme', 'locale',
+] as const;
+
+type PersistedSettings = Record<string, unknown>;
+
+function visualSettings(settings: PersistedSettings): PersistedSettings {
+  return Object.fromEntries(
+    VISUAL_SETTING_KEYS
+      .filter((key) => key in settings)
+      .map((key) => [key, settings[key]]),
+  );
+}
+
+async function loadAccountSettings(account: AccountEntry): Promise<PersistedSettings | null> {
+  const response = await apiFetch('/api/settings', {
+    headers: {
+      'x-settings-username': account.username,
+      'x-settings-server': account.serverUrl,
+    },
+  });
+  if (!response.ok) return null;
+  const { settings } = await response.json();
+  return settings && typeof settings === 'object' && !Array.isArray(settings)
+    ? settings as PersistedSettings
+    : {};
+}
+
+async function saveAccountSettings(account: AccountEntry, settings: PersistedSettings): Promise<void> {
+  const response = await apiFetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: account.username, serverUrl: account.serverUrl, settings }),
+  });
+  if (!response.ok) throw new Error(`Failed to save settings for ${account.id}`);
+}
 
 export type FontSize = 'small' | 'medium' | 'large';
 export type Density = 'extra-compact' | 'compact' | 'regular' | 'comfortable';
@@ -872,6 +920,28 @@ export const useSettingsStore = create<SettingsState>()(
           }
           const { settings } = await res.json();
           if (!settings) {
+            // A newly added account has no settings record yet. Seed it from
+            // any existing account's visual subset; after normal mirroring all
+            // existing accounts have the same visual values.
+            const accountStore = useAccountStore.getState();
+            const target = accountStore.accounts.find(
+              (account) => account.username === username && account.serverUrl === serverUrl,
+            );
+            const source = target
+              ? accountStore.accounts.find((account) => account.id !== target.id)
+              : undefined;
+            if (target && source) {
+              const sourceSettings = await loadAccountSettings(source);
+              if (sourceSettings) {
+                const visual = visualSettings(sourceSettings);
+                isLoadingFromServer = true;
+                get().importSettings(JSON.stringify(visual));
+                await saveAccountSettings(target, visual);
+                isLoadingFromServer = false;
+                syncLog('Seeded visual settings for newly added account');
+                return true;
+              }
+            }
             syncLog('No server settings found yet');
             return false;
           }
@@ -893,6 +963,7 @@ export const useSettingsStore = create<SettingsState>()(
           return false;
         }
       },
+
     }),
     {
       name: 'settings-storage',
@@ -1063,6 +1134,25 @@ if (typeof window !== 'undefined') {
   applyDensity(store.density);
   applyAnimations(store.animationsEnabled);
 
+  const mirrorVisualSettingsToOtherAccounts = async (settings: PersistedSettings): Promise<void> => {
+    const accountStore = useAccountStore.getState();
+    const source = accountStore.accounts.find(
+      (account) => account.username === syncUsername && account.serverUrl === syncServerUrl,
+    );
+    if (!source) return;
+
+    const visual = visualSettings(settings);
+    const otherAccounts = accountStore.accounts.filter((account) => account.id !== source.id);
+
+    // Last visual change wins: merge the active account's visual subset into
+    // every other account, retaining each target's account-specific settings.
+    await Promise.allSettled(otherAccounts.map(async (account) => {
+      const existing = await loadAccountSettings(account);
+      if (!existing) return;
+      await saveAccountSettings(account, { ...existing, ...visual });
+    }));
+  };
+
   // Shared sync function used by all store subscribers
   const syncToServer = async (retries = 1): Promise<void> => {
     const settings = JSON.parse(useSettingsStore.getState().exportSettings());
@@ -1092,6 +1182,9 @@ if (typeof window !== 'undefined') {
       syncError('Settings sync failed:', body.error || `status ${res.status}`);
     } else {
       syncLog('Settings synced to server successfully');
+      // Keep the visual subset consistent across every account while leaving
+      // account-specific settings untouched.
+      await mirrorVisualSettingsToOtherAccounts(settings);
     }
   };
 
