@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.; [warn] Functions should have comments: updateCountdown, onBlur, onOnline, onOffline, onSelectionChange, onSwMessage, openPendingMailto, loadData, …
 "use client";
 
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
@@ -292,8 +293,10 @@ export default function Home() {
     markAsSpam,
     undoSpam,
     searchFilters,
+    searchScope,
     isAdvancedSearchOpen,
     setSearchFilters,
+    setSearchScope,
     clearSearchFilters,
     toggleAdvancedSearch,
     advancedSearch,
@@ -1822,7 +1825,7 @@ export default function Home() {
     }
   };
 
-  const handleMailboxSelect = async (mailboxId: string) => {
+  const handleMailboxSelect = async (mailboxId: string, searchScopeForSelection: 'all' | 'folder' = 'folder') => {
     if (mailboxId === SCHEDULED_MAILBOX_ID) {
       if (!delayedSendSupported) {
         setScheduledView(false);
@@ -1914,6 +1917,10 @@ export default function Home() {
       exitUnifiedView();
     }
     setScheduledView(false);
+    // Selecting a folder from navigation makes an active search local to that
+    // folder. The advanced picker explicitly passes "all" for its All folders
+    // option instead.
+    setSearchScope(searchScopeForSelection);
 
     selectMailbox(mailboxId);
     selectEmail(null); // Clear selected email when switching mailboxes
@@ -2980,6 +2987,26 @@ export default function Home() {
                         value={searchFilters.isUnread}
                         onClick={() => { const next = searchFilters.isUnread === null ? true : searchFilters.isUnread ? false : null; setSearchFilters({ isUnread: next }); handleAdvancedSearch(); }}
                       />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Folder scope requires a concrete selected folder. If the
+                          // user selected “All folders”, return to Most instead.
+                          const nextScope = searchScope === 'most'
+                            ? 'all'
+                            : searchScope === 'all' && selectedMailbox
+                              ? 'folder'
+                              : 'most';
+                          setSearchScope(nextScope);
+                          handleAdvancedSearch();
+                        }}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                        title={`Search scope: ${searchScope === 'most' ? 'Most mail (excluding Junk and Trash)' : searchScope === 'all' ? 'All folders' : 'Current folder'}`}
+                        aria-label={`Search scope: ${searchScope === 'most' ? 'Most mail' : searchScope === 'all' ? 'All folders' : 'Current folder'}`}
+                      >
+                        <Filter className="w-3.5 h-3.5" />
+                        {searchScope === 'most' ? 'Most' : searchScope === 'all' ? 'All' : 'Folder'}
+                      </button>
                     </div>
                     <div className="flex items-center gap-1">
                       <Button variant="ghost" size="sm" onClick={() => { clearSearchFilters(); setShowAdvancedFields(false); if (client) advancedSearch(client); }} className="h-7 px-2 text-xs text-muted-foreground">
@@ -3048,7 +3075,7 @@ export default function Home() {
                         <label className="text-xs text-muted-foreground mb-1 block">{t("advanced_search.folder")}</label>
                         <select
                           value={selectedMailbox || ""}
-                          onChange={(e) => { handleMailboxSelect(e.target.value); }}
+                          onChange={(e) => { handleMailboxSelect(e.target.value, e.target.value ? 'folder' : 'all'); }}
                           className="w-full h-8 text-sm rounded-md border border-input bg-background px-3 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
                         >
                           <option value="">{t("advanced_search.all_folders")}</option>

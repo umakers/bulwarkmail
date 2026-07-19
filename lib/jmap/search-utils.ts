@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.; [warn] Functions should have comments: toWildcardQuery, buildJMAPFilter, isFilterEmpty, activeFilterCount
 export interface SearchFilters {
   from: string;
   to: string;
@@ -39,7 +40,8 @@ export function toWildcardQuery(query: string): string {
 export function buildJMAPFilter(
   textQuery: string,
   filters: SearchFilters,
-  mailboxId?: string
+  mailboxId?: string,
+  excludedMailboxIds: string[] = [],
 ): Record<string, unknown> {
   const conditions: Record<string, unknown>[] = [];
 
@@ -98,6 +100,13 @@ export function buildJMAPFilter(
 
   if (mailboxId) {
     conditions.push({ inMailbox: mailboxId });
+  }
+
+  for (const mailboxId of excludedMailboxIds) {
+    conditions.push({
+      operator: "NOT",
+      conditions: [{ inMailbox: mailboxId }],
+    });
   }
 
   if (conditions.length === 0) {

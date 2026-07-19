@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.; [warn] Functions should have comments: getNextSelectedEmail, annotateScheduledEmails, annotateScheduledEmail, shouldClearPendingUndoSend, resolveActionClient, resolveActionMailboxes, resolveCrossIncludedMailboxIds, resolveEmailActionContext, …
 import { create } from "zustand";
 import { Email, Mailbox, StateChange, ScheduledEmail, SendEmailResult, isUnifiedMailboxId, isCrossViewId } from "@/lib/jmap/types";
 import type { UnifiedMailboxRole, CrossView } from "@/lib/jmap/types";
@@ -19,6 +20,8 @@ type ScheduledSubmissionMetadata = {
 };
 
 const VIRTUAL_SCHEDULED_MAILBOX_ID = '__scheduled__';
+
+export type SearchScope = 'most' | 'all' | 'folder';
 
 type PendingUndoSend = { submissionId: string; emailId?: string; sendAt: string; isSmime: boolean };
 
@@ -69,6 +72,8 @@ interface EmailStore {
 
   // Advanced search state
   searchFilters: SearchFilters;
+  /** Search scope: most excludes Junk and Trash; all includes every folder. */
+  searchScope: SearchScope;
   isAdvancedSearchOpen: boolean;
   searchAbortController: AbortController | null;
   /** Plugin-contributed search results (CRM hits, Slack messages, etc.) populated by emailHooks.onProvideSearchResults. */
@@ -189,6 +194,7 @@ interface EmailStore {
   searchEmails: (client: IJMAPClient, query: string) => Promise<void>;
   advancedSearch: (client: IJMAPClient) => Promise<void>;
   setSearchFilters: (filters: Partial<SearchFilters>) => void;
+  setSearchScope: (scope: SearchScope) => void;
   clearSearchFilters: () => void;
   toggleAdvancedSearch: () => void;
   toggleStar: (client: IJMAPClient, emailId: string) => Promise<void>;
@@ -341,6 +347,43 @@ function resolveActionMailboxes(): Mailbox[] {
     return state.accountMailboxes[state.viewingAccountId] ?? state.mailboxes;
   }
   return state.mailboxes;
+}
+
+/** Resolves the JMAP constraints for the selected search scope. */
+function resolveSearchScope(scope: SearchScope, selectedMailbox: string): {
+  mailboxId?: string;
+  accountId?: string;
+  excludedMailboxIds: string[];
+} {
+  const mailboxes = resolveActionMailboxes();
+  const selected = mailboxes.find((mailbox) => mailbox.id === selectedMailbox);
+  const accountId = selected?.isShared ? selected.accountId : undefined;
+
+  if (scope === 'folder' && selectedMailbox) {
+    return {
+      mailboxId: selected?.originalId || selectedMailbox,
+      accountId,
+      excludedMailboxIds: [],
+    };
+  }
+
+  if (scope === 'all') {
+    return { accountId, excludedMailboxIds: [] };
+  }
+
+  const scopeMailboxes = selected?.isShared
+    ? mailboxes.filter((mailbox) => mailbox.isShared && mailbox.accountId === selected.accountId)
+    : mailboxes.filter((mailbox) => !mailbox.isShared);
+  const excludedMailboxIds = scopeMailboxes
+    .filter((mailbox) => {
+      if (mailbox.role === 'junk' || mailbox.role === 'trash') return true;
+      // Some providers expose ordinary folders instead of assigning JMAP
+      // roles, so also recognize common Spam/Junk/Trash/Bin folder names.
+      return /spam|junk|trash|bin|deleted/i.test(mailbox.name);
+    })
+    .map((mailbox) => mailbox.originalId || mailbox.id);
+
+  return { accountId, excludedMailboxIds };
 }
 
 /**
@@ -774,6 +817,7 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
 
   // Advanced search state
   searchFilters: { ...DEFAULT_SEARCH_FILTERS },
+  searchScope: 'most',
   isAdvancedSearchOpen: false,
   searchAbortController: null,
   externalSearchResults: [],
@@ -1162,21 +1206,13 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
 
       let result;
 
-      const { searchFilters } = get();
+      const { searchFilters, searchScope } = get();
       const hasFilters = !isFilterEmpty(searchFilters);
 
       if (searchQuery || hasFilters) {
-        const mailboxes = resolveActionMailboxes();
-        const mailbox = mailboxes.find(mb => mb.id === selectedMailbox);
-        const jmapMailboxId = mailbox?.originalId || selectedMailbox;
-        const accountId = mailbox?.isShared ? mailbox.accountId : undefined;
-
-        if (hasFilters) {
-          const filter = buildJMAPFilter(searchQuery, searchFilters, jmapMailboxId);
-          result = await effectiveClient.advancedSearchEmails(filter, accountId, emailsPerPage, position);
-        } else {
-          result = await effectiveClient.searchEmails(searchQuery, jmapMailboxId, accountId, emailsPerPage, position);
-        }
+        const scope = resolveSearchScope(searchScope, selectedMailbox);
+        const filter = buildJMAPFilter(searchQuery, searchFilters, scope.mailboxId, scope.excludedMailboxIds);
+        result = await effectiveClient.advancedSearchEmails(filter, scope.accountId, emailsPerPage, position);
       } else {
         // Load more from mailbox
         // Find the mailbox to get its accountId (for shared folder support)
@@ -1833,7 +1869,7 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   searchEmails: async (client, query) => {
     set({ isLoading: true, error: null, searchQuery: query, emails: [], hasMoreEmails: false, totalEmails: 0 }); // Clear emails for loading state
     try {
-      const { isUnifiedView, unifiedRole, crossView, selectedMailbox, searchFilters } = get();
+      const { isUnifiedView, unifiedRole, crossView, selectedMailbox, searchFilters, searchScope } = get();
       const emailsPerPage = useSettingsStore.getState().emailsPerPage;
 
       let result;
@@ -1853,15 +1889,10 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         unifiedErrors = result.errors;
 
       } else {
-        // Get the current mailbox to scope the search.
-        const mailboxes = resolveActionMailboxes();
-        const mailbox = mailboxes.find(mb => mb.id === selectedMailbox);
-        // Use originalId for shared mailboxes
-        const jmapMailboxId = mailbox?.originalId || selectedMailbox;
-        // Only pass accountId for shared mailboxes, not for primary account
-        accountId = mailbox?.isShared ? mailbox.accountId : undefined;
-
-        result = await resolveActionClient(client).searchEmails(query, jmapMailboxId, accountId, emailsPerPage, 0);
+        const scope = resolveSearchScope(searchScope, selectedMailbox);
+        accountId = scope.accountId;
+        const filter = buildJMAPFilter(query, DEFAULT_SEARCH_FILTERS, scope.mailboxId, scope.excludedMailboxIds);
+        result = await resolveActionClient(client).advancedSearchEmails(filter, accountId, emailsPerPage, 0);
       }
 
       const hookEdit = await emailHooks.onSearchResults.transform({
@@ -1905,8 +1936,7 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   },
 
   advancedSearch: async (client) => {
-    const { searchQuery, searchFilters, selectedMailbox, searchAbortController, isUnifiedView, unifiedRole, crossView } = get();
-    const mailboxes = resolveActionMailboxes();
+    const { searchQuery, searchFilters, searchScope, selectedMailbox, searchAbortController, isUnifiedView, unifiedRole, crossView } = get();
 
     if (searchAbortController) {
       searchAbortController.abort();
@@ -1951,11 +1981,9 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         unifiedErrors = result.errors;
 
       } else {
-        const mailbox = mailboxes.find(mb => mb.id === selectedMailbox);
-        const jmapMailboxId = mailbox?.originalId || selectedMailbox;
-        accountId = mailbox?.isShared ? mailbox.accountId : undefined;
-
-        const filter = buildJMAPFilter(searchQuery, searchFilters, jmapMailboxId);
+        const scope = resolveSearchScope(searchScope, selectedMailbox);
+        accountId = scope.accountId;
+        const filter = buildJMAPFilter(searchQuery, searchFilters, scope.mailboxId, scope.excludedMailboxIds);
         result = await resolveActionClient(client).advancedSearchEmails(filter, accountId, emailsPerPage, 0);
       }
 
@@ -2014,8 +2042,10 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
     }));
   },
 
+  setSearchScope: (searchScope) => set({ searchScope }),
+
   clearSearchFilters: () => {
-    set({ searchFilters: { ...DEFAULT_SEARCH_FILTERS } });
+    set({ searchFilters: { ...DEFAULT_SEARCH_FILTERS }, searchScope: 'most' });
   },
 
   toggleAdvancedSearch: () => {
@@ -2753,13 +2783,14 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
 
       // Respect active search filters / query so that a push-triggered refresh
       // does not silently replace a filtered list with an unfiltered one.
-      const { searchQuery, searchFilters } = get();
+      const { searchQuery, searchFilters, searchScope } = get();
       const hasFilters = !isFilterEmpty(searchFilters);
 
       let result;
       if (hasFilters || searchQuery) {
-        const filter = buildJMAPFilter(searchQuery, searchFilters, jmapMailboxId);
-        result = await effectiveClient.advancedSearchEmails(filter, accountId, emailsPerPage, 0);
+        const scope = resolveSearchScope(searchScope, selectedMailbox);
+        const filter = buildJMAPFilter(searchQuery, searchFilters, scope.mailboxId, scope.excludedMailboxIds);
+        result = await effectiveClient.advancedSearchEmails(filter, scope.accountId, emailsPerPage, 0);
       } else {
         result = await effectiveClient.getEmails(jmapMailboxId, accountId, emailsPerPage, 0, undefined, true);
       }

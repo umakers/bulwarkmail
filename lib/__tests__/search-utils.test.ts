@@ -1,3 +1,4 @@
+// TODO(umakers-frontend): [warn] File should start with a purpose comment.
 import { describe, it, expect } from 'vitest';
 import {
   toWildcardQuery,
@@ -197,6 +198,18 @@ describe('buildJMAPFilter', () => {
         conditions: [
           { text: 'pri*' },
           { inMailbox: 'inbox-1' },
+        ],
+      });
+    });
+
+    it('excludes Junk and Trash mailboxes for the most-mail scope', () => {
+      const result = buildJMAPFilter('report', emptyFilters, undefined, ['junk-1', 'trash-1']);
+      expect(result).toEqual({
+        operator: 'AND',
+        conditions: [
+          { text: 'report*' },
+          { operator: 'NOT', conditions: [{ inMailbox: 'junk-1' }] },
+          { operator: 'NOT', conditions: [{ inMailbox: 'trash-1' }] },
         ],
       });
     });
