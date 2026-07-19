@@ -920,15 +920,15 @@ export const useSettingsStore = create<SettingsState>()(
           }
           const { settings } = await res.json();
           if (!settings) {
-            // A newly added account has no settings record yet. Seed it from
-            // any existing account's visual subset; after normal mirroring all
-            // existing accounts have the same visual values.
+            // Seed new account visuals only from connected accounts.
+            // Disconnected local accounts may belong to another browser user.
             const accountStore = useAccountStore.getState();
             const target = accountStore.accounts.find(
               (account) => account.username === username && account.serverUrl === serverUrl,
             );
             const source = target
-              ? accountStore.accounts.find((account) => account.id !== target.id)
+              // Seed only from connected accounts, not every persisted local account.
+              ? accountStore.accounts.find((account) => account.isConnected && account.id !== target.id)
               : undefined;
             if (target && source) {
               const sourceSettings = await loadAccountSettings(source);
@@ -1134,18 +1134,22 @@ if (typeof window !== 'undefined') {
   applyDensity(store.density);
   applyAnimations(store.animationsEnabled);
 
+  // Mirrors visual settings to the other connected accounts in this browser session.
   const mirrorVisualSettingsToOtherAccounts = async (settings: PersistedSettings): Promise<void> => {
     const accountStore = useAccountStore.getState();
     const source = accountStore.accounts.find(
-      (account) => account.username === syncUsername && account.serverUrl === syncServerUrl,
+      // Source must be connected; disconnected local accounts can be stale.
+      (account) => account.isConnected && account.username === syncUsername && account.serverUrl === syncServerUrl,
     );
     if (!source) return;
 
     const visual = visualSettings(settings);
-    const otherAccounts = accountStore.accounts.filter((account) => account.id !== source.id);
+    const otherAccounts = accountStore.accounts.filter(
+      // Mirror only to connected accounts, not every persisted local account.
+      (account) => account.isConnected && account.id !== source.id,
+    );
 
-    // Last visual change wins: merge the active account's visual subset into
-    // every other account, retaining each target's account-specific settings.
+    // Client decides the mirror targets; server only authenticates each request.
     await Promise.allSettled(otherAccounts.map(async (account) => {
       const existing = await loadAccountSettings(account);
       if (!existing) return;
