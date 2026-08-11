@@ -5,6 +5,7 @@ import type { IJMAPClient } from "@/lib/jmap/client-interface";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useCalendarStore } from "@/stores/calendar-store";
 import { SearchFilters, DEFAULT_SEARCH_FILTERS, buildJMAPFilter, isFilterEmpty } from "@/lib/jmap/search-utils";
+import { isGlobalSearchEnabled } from "@/lib/global-search";
 import { emailHooks } from "@/lib/plugin-hooks";
 import type { ExternalSearchResult } from "@/lib/plugin-types";
 import { fetchUnifiedEmails, fetchUnifiedMailboxCounts, searchUnifiedEmails, advancedSearchUnifiedEmails, fetchCrossViewEmails, searchCrossViewEmails, advancedSearchCrossViewEmails, getCrossUnreadTotal, type UnifiedAccountClient, type UnifiedMailboxCounts } from "@/lib/unified-mailbox";
@@ -351,6 +352,16 @@ function resolveActionMailboxes(): Mailbox[] {
     return state.accountMailboxes[state.viewingAccountId] ?? state.mailboxes;
   }
   return state.mailboxes;
+}
+
+function resolveSearchMailboxScope(): { mailboxId: string | undefined; accountId: string | undefined } {
+  if (isGlobalSearchEnabled()) return { mailboxId: undefined, accountId: undefined };
+  const selectedMailbox = useEmailStore.getState().selectedMailbox;
+  const mailbox = resolveActionMailboxes().find((candidate) => candidate.id === selectedMailbox);
+  return {
+    mailboxId: mailbox?.originalId ?? selectedMailbox,
+    accountId: mailbox?.isShared ? mailbox.accountId : undefined,
+  };
 }
 
 /**
@@ -1245,16 +1256,12 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
       const hasFilters = !isFilterEmpty(searchFilters);
 
       if (searchQuery || hasFilters) {
-        const mailboxes = resolveActionMailboxes();
-        const mailbox = mailboxes.find(mb => mb.id === selectedMailbox);
-        const jmapMailboxId = mailbox?.originalId || selectedMailbox;
-        const accountId = mailbox?.isShared ? mailbox.accountId : undefined;
-
+        const searchScope = resolveSearchMailboxScope();
         if (hasFilters) {
-          const filter = buildJMAPFilter(searchQuery, searchFilters, jmapMailboxId);
-          result = await effectiveClient.advancedSearchEmails(filter, accountId, emailsPerPage, position);
+          const filter = buildJMAPFilter(searchQuery, searchFilters, searchScope.mailboxId);
+          result = await effectiveClient.advancedSearchEmails(filter, searchScope.accountId, emailsPerPage, position);
         } else {
-          result = await effectiveClient.searchEmails(searchQuery, jmapMailboxId, accountId, emailsPerPage, position);
+          result = await effectiveClient.searchEmails(searchQuery, searchScope.mailboxId, searchScope.accountId, emailsPerPage, position);
         }
       } else {
         // Load more from mailbox
@@ -1987,7 +1994,7 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   searchEmails: async (client, query) => {
     set({ isLoading: true, error: null, searchQuery: query, emails: [], hasMoreEmails: false, totalEmails: 0 }); // Clear emails for loading state
     try {
-      const { isUnifiedView, unifiedRole, crossView, selectedMailbox, searchFilters } = get();
+      const { isUnifiedView, unifiedRole, crossView, searchFilters } = get();
       const emailsPerPage = useSettingsStore.getState().emailsPerPage;
 
       let result;
@@ -2007,15 +2014,9 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         unifiedErrors = result.errors;
 
       } else {
-        // Get the current mailbox to scope the search.
-        const mailboxes = resolveActionMailboxes();
-        const mailbox = mailboxes.find(mb => mb.id === selectedMailbox);
-        // Use originalId for shared mailboxes
-        const jmapMailboxId = mailbox?.originalId || selectedMailbox;
-        // Only pass accountId for shared mailboxes, not for primary account
-        accountId = mailbox?.isShared ? mailbox.accountId : undefined;
-
-        result = await resolveActionClient(client).searchEmails(query, jmapMailboxId, accountId, emailsPerPage, 0);
+        const searchScope = resolveSearchMailboxScope();
+        accountId = searchScope.accountId;
+        result = await resolveActionClient(client).searchEmails(query, searchScope.mailboxId, accountId, emailsPerPage, 0);
       }
 
       const hookEdit = await emailHooks.onSearchResults.transform({
@@ -2059,8 +2060,7 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   },
 
   advancedSearch: async (client) => {
-    const { searchQuery, searchFilters, selectedMailbox, searchAbortController, isUnifiedView, unifiedRole, crossView } = get();
-    const mailboxes = resolveActionMailboxes();
+    const { searchQuery, searchFilters, searchAbortController, isUnifiedView, unifiedRole, crossView } = get();
 
     if (searchAbortController) {
       searchAbortController.abort();
@@ -2105,11 +2105,9 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         unifiedErrors = result.errors;
 
       } else {
-        const mailbox = mailboxes.find(mb => mb.id === selectedMailbox);
-        const jmapMailboxId = mailbox?.originalId || selectedMailbox;
-        accountId = mailbox?.isShared ? mailbox.accountId : undefined;
-
-        const filter = buildJMAPFilter(searchQuery, searchFilters, jmapMailboxId);
+        const searchScope = resolveSearchMailboxScope();
+        accountId = searchScope.accountId;
+        const filter = buildJMAPFilter(searchQuery, searchFilters, searchScope.mailboxId);
         result = await resolveActionClient(client).advancedSearchEmails(filter, accountId, emailsPerPage, 0);
       }
 
@@ -2927,15 +2925,15 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
       // Get emails per page from settings
       const emailsPerPage = useSettingsStore.getState().emailsPerPage;
 
-      // Respect active search filters / query so that a push-triggered refresh
-      // does not silently replace a filtered list with an unfiltered one.
+      // Preserve the active search scope during a push refresh.
       const { searchQuery, searchFilters } = get();
       const hasFilters = !isFilterEmpty(searchFilters);
 
       let result;
       if (hasFilters || searchQuery) {
-        const filter = buildJMAPFilter(searchQuery, searchFilters, jmapMailboxId);
-        result = await effectiveClient.advancedSearchEmails(filter, accountId, emailsPerPage, 0);
+        const searchScope = resolveSearchMailboxScope();
+        const filter = buildJMAPFilter(searchQuery, searchFilters, searchScope.mailboxId);
+        result = await effectiveClient.advancedSearchEmails(filter, searchScope.accountId, emailsPerPage, 0);
       } else {
         result = await effectiveClient.getEmails(jmapMailboxId, accountId, emailsPerPage, 0, undefined, true);
       }

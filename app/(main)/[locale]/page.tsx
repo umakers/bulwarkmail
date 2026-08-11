@@ -47,6 +47,7 @@ import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { TotpReauthDialog } from "@/components/totp-reauth-dialog";
 import { DragDropProvider } from "@/contexts/drag-drop-context";
 import { isFilterEmpty, activeFilterCount } from "@/lib/jmap/search-utils";
+import { isGlobalSearchEnabled } from "@/lib/global-search";
 import { WelcomeBanner } from "@/components/ui/welcome-banner";
 import { NavigationRail } from "@/components/layout/navigation-rail";
 import { SidebarAppsModal } from "@/components/layout/sidebar-apps-modal";
@@ -89,6 +90,7 @@ const SCHEDULED_MAILBOX_ID = '__scheduled__';
 export default function Home() {
   const t = useTranslations();
   const tCommon = useTranslations('common');
+  const globalSearchEnabled = isGlobalSearchEnabled();
   const tQuote = useTranslations('quote_header');
   const { appName } = useConfig();
   const mailLayout = useSettingsStore((state) => state.mailLayout);
@@ -3242,6 +3244,7 @@ export default function Home() {
                 {activeHasMore
                   ? t("advanced_search.results_found_more", { count: activeEmails.length })
                   : t("advanced_search.results_found", { count: activeEmails.length })}
+                {globalSearchEnabled && " (global)"}
               </div>
             )}
 
