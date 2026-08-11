@@ -436,6 +436,7 @@ export function EmailList({
       {!isFilterEmpty(searchFilters) && (
         <SearchChips
           filters={searchFilters}
+          mailboxName={mailboxes.find((mailbox) => mailbox.id === searchFilters.mailboxId)?.name}
           onRemoveFilter={(key) => {
             const resetValue = DEFAULT_SEARCH_FILTERS[key];
             setSearchFilters({ [key]: resetValue });

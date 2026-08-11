@@ -242,6 +242,7 @@ describe('buildJMAPFilter', () => {
         to: 'bob',
         subject: 'invoice',
         body: 'payment',
+        mailboxId: '',
         hasAttachment: true,
         dateAfter: '2024-01-01',
         dateBefore: '2024-12-31',
@@ -347,17 +348,18 @@ describe('activeFilterCount', () => {
     })).toBe(2);
   });
 
-  it('counts all 9 filters when all active', () => {
+  it('counts all 10 filters when all active', () => {
     expect(activeFilterCount({
       from: 'a',
       to: 'b',
       subject: 'c',
       body: 'd',
+      mailboxId: 'archive',
       hasAttachment: true,
       dateAfter: '2024-01-01',
       dateBefore: '2024-12-31',
       isUnread: true,
       isStarred: true,
-    })).toBe(9);
+    })).toBe(10);
   });
 });

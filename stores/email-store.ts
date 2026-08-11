@@ -354,14 +354,25 @@ function resolveActionMailboxes(): Mailbox[] {
   return state.mailboxes;
 }
 
-function resolveSearchMailboxScope(): { mailboxId: string | undefined; accountId: string | undefined } {
-  if (isGlobalSearchEnabled()) return { mailboxId: undefined, accountId: undefined };
-  const selectedMailbox = useEmailStore.getState().selectedMailbox;
-  const mailbox = resolveActionMailboxes().find((candidate) => candidate.id === selectedMailbox);
+/** Resolves the configured default or an explicit search folder to its JMAP account/id. */
+function resolveSearchMailboxScope(mailboxId: string): { mailboxId: string | undefined; accountId: string | undefined } {
+  const effectiveMailboxId = isGlobalSearchEnabled()
+    ? mailboxId
+    : mailboxId || useEmailStore.getState().selectedMailbox;
+  if (!effectiveMailboxId) return { mailboxId: undefined, accountId: undefined };
+  const mailbox = resolveActionMailboxes().find((candidate) => candidate.id === effectiveMailboxId);
   return {
-    mailboxId: mailbox?.originalId ?? selectedMailbox,
+    mailboxId: mailbox?.originalId ?? effectiveMailboxId,
     accountId: mailbox?.isShared ? mailbox.accountId : undefined,
   };
+}
+
+/** Adds the selected tag to an existing JMAP search filter without replacing it. */
+function withSelectedKeyword(filter: Record<string, unknown>, selectedKeyword: string | null): Record<string, unknown> {
+  if (!selectedKeyword) return filter;
+  const keywordCondition = { hasKeyword: `$label:${selectedKeyword}` };
+  if (Object.keys(filter).length === 0) return keywordCondition;
+  return { operator: "AND", conditions: [filter, keywordCondition] };
 }
 
 /**
@@ -1165,8 +1176,14 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         const position = emails.length;
         const built = await buildUnifiedAccountClients({ includeGroup });
         const hasFilters = !isFilterEmpty(get().searchFilters);
-        const result = hasFilters
-          ? await advancedSearchCrossViewEmails(built, crossView, buildJMAPFilter(searchQuery, get().searchFilters, undefined), emailsPerPage, position)
+        const result = hasFilters || selectedKeyword
+          ? await advancedSearchCrossViewEmails(
+              built,
+              crossView,
+              withSelectedKeyword(buildJMAPFilter(searchQuery, get().searchFilters, undefined), selectedKeyword),
+              emailsPerPage,
+              position,
+            )
           : searchQuery
             ? await searchCrossViewEmails(built, crossView, searchQuery, emailsPerPage, position)
             : await fetchCrossViewEmails(built, crossView, emailsPerPage, position);
@@ -1203,11 +1220,11 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         const built = await buildUnifiedAccountClients({ includeGroup });
         const { searchFilters } = get();
         const hasFilters = !isFilterEmpty(searchFilters);
-        const result = hasFilters
+        const result = hasFilters || selectedKeyword
           ? await advancedSearchUnifiedEmails(
               built,
               unifiedRole,
-              (mailboxId) => buildJMAPFilter(searchQuery, searchFilters, mailboxId),
+              (mailboxId) => withSelectedKeyword(buildJMAPFilter(searchQuery, searchFilters, mailboxId), selectedKeyword),
               emailsPerPage,
               position,
             )
@@ -1256,9 +1273,14 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
       const hasFilters = !isFilterEmpty(searchFilters);
 
       if (searchQuery || hasFilters) {
-        const searchScope = resolveSearchMailboxScope();
-        if (hasFilters) {
-          const filter = buildJMAPFilter(searchQuery, searchFilters, searchScope.mailboxId);
+        // Global search omits inMailbox; otherwise the open folder is the
+        // default scope. An advanced folder selection is always explicit.
+        const searchScope = resolveSearchMailboxScope(searchFilters.mailboxId);
+        if (hasFilters || selectedKeyword) {
+          const filter = withSelectedKeyword(
+            buildJMAPFilter(searchQuery, searchFilters, searchScope.mailboxId),
+            selectedKeyword,
+          );
           result = await effectiveClient.advancedSearchEmails(filter, searchScope.accountId, emailsPerPage, position);
         } else {
           result = await effectiveClient.searchEmails(searchQuery, searchScope.mailboxId, searchScope.accountId, emailsPerPage, position);
@@ -2014,7 +2036,9 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         unifiedErrors = result.errors;
 
       } else {
-        const searchScope = resolveSearchMailboxScope();
+        // The configured default scope is global or the open folder; an
+        // advanced-search folder selection overrides either default.
+        const searchScope = resolveSearchMailboxScope(searchFilters.mailboxId);
         accountId = searchScope.accountId;
         result = await resolveActionClient(client).searchEmails(query, searchScope.mailboxId, accountId, emailsPerPage, 0);
       }
@@ -2060,7 +2084,7 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
   },
 
   advancedSearch: async (client) => {
-    const { searchQuery, searchFilters, searchAbortController, isUnifiedView, unifiedRole, crossView } = get();
+    const { searchQuery, searchFilters, selectedKeyword, searchAbortController, isUnifiedView, unifiedRole, crossView } = get();
 
     if (searchAbortController) {
       searchAbortController.abort();
@@ -2088,7 +2112,11 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         // Cross views apply the advanced filter (text + fields) on top of the
         // view membership; an empty filter degrades to a plain membership query.
         result = await advancedSearchCrossViewEmails(
-          built, crossView, buildJMAPFilter(searchQuery, searchFilters, undefined), emailsPerPage, 0,
+          built,
+          crossView,
+          withSelectedKeyword(buildJMAPFilter(searchQuery, searchFilters, undefined), selectedKeyword),
+          emailsPerPage,
+          0,
         );
         unifiedErrors = result.errors;
 
@@ -2098,16 +2126,21 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
         result = await advancedSearchUnifiedEmails(
           built,
           unifiedRole,
-          (mailboxId) => buildJMAPFilter(searchQuery, searchFilters, mailboxId),
+          (mailboxId) => withSelectedKeyword(buildJMAPFilter(searchQuery, searchFilters, mailboxId), selectedKeyword),
           emailsPerPage,
           0,
         );
         unifiedErrors = result.errors;
 
       } else {
-        const searchScope = resolveSearchMailboxScope();
+        // Advanced filters use the configured default scope; the dropdown can
+        // explicitly narrow it without changing the mailbox being browsed.
+        const searchScope = resolveSearchMailboxScope(searchFilters.mailboxId);
         accountId = searchScope.accountId;
-        const filter = buildJMAPFilter(searchQuery, searchFilters, searchScope.mailboxId);
+        const filter = withSelectedKeyword(
+          buildJMAPFilter(searchQuery, searchFilters, searchScope.mailboxId),
+          selectedKeyword,
+        );
         result = await resolveActionClient(client).advancedSearchEmails(filter, accountId, emailsPerPage, 0);
       }
 
@@ -2925,14 +2958,18 @@ export const useEmailStore = create<EmailStore>((set, get) => ({
       // Get emails per page from settings
       const emailsPerPage = useSettingsStore.getState().emailsPerPage;
 
-      // Preserve the active search scope during a push refresh.
-      const { searchQuery, searchFilters } = get();
+      // Preserve the configured default or explicit folder scope during a push
+      // refresh instead of accidentally changing the active search.
+      const { searchQuery, searchFilters, selectedKeyword } = get();
       const hasFilters = !isFilterEmpty(searchFilters);
 
       let result;
       if (hasFilters || searchQuery) {
-        const searchScope = resolveSearchMailboxScope();
-        const filter = buildJMAPFilter(searchQuery, searchFilters, searchScope.mailboxId);
+        const searchScope = resolveSearchMailboxScope(searchFilters.mailboxId);
+        const filter = withSelectedKeyword(
+          buildJMAPFilter(searchQuery, searchFilters, searchScope.mailboxId),
+          selectedKeyword,
+        );
         result = await effectiveClient.advancedSearchEmails(filter, searchScope.accountId, emailsPerPage, 0);
       } else {
         result = await effectiveClient.getEmails(jmapMailboxId, accountId, emailsPerPage, 0, undefined, true);

@@ -3,6 +3,7 @@ export interface SearchFilters {
   to: string;
   subject: string;
   body: string;
+  mailboxId: string;
   hasAttachment: boolean | null;
   dateAfter: string;
   dateBefore: string;
@@ -15,6 +16,7 @@ export const DEFAULT_SEARCH_FILTERS: SearchFilters = {
   to: "",
   subject: "",
   body: "",
+  mailboxId: "",
   hasAttachment: null,
   dateAfter: "",
   dateBefore: "",
@@ -120,6 +122,7 @@ export function isFilterEmpty(filters: SearchFilters): boolean {
     !filters.to &&
     !filters.subject &&
     !filters.body &&
+    !filters.mailboxId &&
     filters.hasAttachment === null &&
     !filters.dateAfter &&
     !filters.dateBefore &&
@@ -134,6 +137,7 @@ export function activeFilterCount(filters: SearchFilters): number {
   if (filters.to) count++;
   if (filters.subject) count++;
   if (filters.body) count++;
+  if (filters.mailboxId) count++;
   if (filters.hasAttachment !== null) count++;
   if (filters.dateAfter) count++;
   if (filters.dateBefore) count++;

@@ -9,6 +9,7 @@ interface SearchChipsProps {
   filters: SearchFilters;
   onRemoveFilter: (key: keyof SearchFilters) => void;
   onClearAll: () => void;
+  mailboxName?: string;
   className?: string;
 }
 
@@ -16,6 +17,7 @@ export function SearchChips({
   filters,
   onRemoveFilter,
   onClearAll,
+  mailboxName,
   className,
 }: SearchChipsProps) {
   const t = useTranslations("advanced_search");
@@ -33,6 +35,9 @@ export function SearchChips({
   }
   if (filters.body) {
     chips.push({ key: "body", label: t("body"), value: filters.body });
+  }
+  if (filters.mailboxId) {
+    chips.push({ key: "mailboxId", label: t("folder"), value: mailboxName ?? filters.mailboxId });
   }
   if (filters.hasAttachment !== null) {
     chips.push({

@@ -1,3 +1,4 @@
+// Verifies mail-search scope follows the global-search environment setting.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEmailStore } from './email-store';
 import { DEFAULT_SEARCH_FILTERS } from '@/lib/jmap/search-utils';
@@ -12,7 +13,7 @@ function createClient() {
   };
 }
 
-describe('email-store global search', () => {
+describe('email-store search scope', () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_GLOBAL_SEARCH_ENABLED = 'false';
     useEmailStore.setState({
@@ -24,6 +25,7 @@ describe('email-store global search', () => {
       crossView: null,
       searchQuery: '',
       searchFilters: { ...DEFAULT_SEARCH_FILTERS },
+      selectedKeyword: null,
       hasMoreEmails: false,
       isLoadingMore: false,
       scheduledSubmissionByEmailId: new Map(),
@@ -45,6 +47,47 @@ describe('email-store global search', () => {
     await useEmailStore.getState().searchEmails(client as never, 'invoice');
 
     expect(client.searchEmails).toHaveBeenCalledWith('invoice', undefined, undefined, 50, 0);
+  });
+
+  it('keeps an explicitly selected advanced-search folder scoped', async () => {
+    const client = createClient();
+    process.env.NEXT_PUBLIC_GLOBAL_SEARCH_ENABLED = 'true';
+    useEmailStore.setState({
+      searchFilters: { ...DEFAULT_SEARCH_FILTERS, from: 'billing@example.com', mailboxId: 'archive' },
+    });
+
+    await useEmailStore.getState().advancedSearch(client as never);
+
+    expect(client.advancedSearchEmails).toHaveBeenCalledWith(
+      {
+        operator: 'AND',
+        conditions: [{ from: 'billing@example.com' }, { inMailbox: 'archive' }],
+      },
+      undefined,
+      50,
+      0,
+    );
+  });
+
+  it('intersects an active search with the selected tag', async () => {
+    const client = createClient();
+    process.env.NEXT_PUBLIC_GLOBAL_SEARCH_ENABLED = 'true';
+    useEmailStore.setState({
+      searchQuery: 'invoice',
+      selectedKeyword: 'work',
+    });
+
+    await useEmailStore.getState().advancedSearch(client as never);
+
+    expect(client.advancedSearchEmails).toHaveBeenCalledWith(
+      {
+        operator: 'AND',
+        conditions: [{ text: 'invoice*' }, { hasKeyword: '$label:work' }],
+      },
+      undefined,
+      50,
+      0,
+    );
   });
 
   it('retains global scope when loading more results', async () => {

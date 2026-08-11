@@ -1931,10 +1931,14 @@ export default function Home() {
   // accountId === null means the active account; non-null means a viewing
   // override that fetches via that account's JMAP client.
   const handleAccountMailboxSelect = async (accountId: string | null, mailboxId: string) => {
+    const hasActiveSearch = Boolean(searchQuery) || !isFilterEmpty(searchFilters);
     const viewingClient = accountId
       ? useAuthStore.getState().getClientForAccount(accountId) ?? client
       : client;
     selectAccountMailbox(accountId, mailboxId);
+    if (globalSearchEnabled && hasActiveSearch) {
+      setSearchFilters({ mailboxId });
+    }
     selectEmail(null);
     if (isMobile) {
       setSidebarOpen(false);
@@ -1944,8 +1948,8 @@ export default function Home() {
       setTabletListVisible(true);
     }
     if (viewingClient) {
-      // Keep an active search applied when switching folders (#553); the
-      // store actions resolve the viewing account's client internally.
+      // Keep an active search applied when switching folders (#553). Its scope
+      // follows the global-search setting; only the client may change.
       if (!isFilterEmpty(searchFilters)) {
         await advancedSearch(viewingClient);
       } else if (searchQuery) {
@@ -1995,8 +1999,8 @@ export default function Home() {
       }
 
       const populated = await buildPopulatedUnifiedAccounts();
-      // Keep an active search across the switch and re-run it in this view
-      // (mirrors normal mailboxes), preserving advanced filters; otherwise browse.
+      // Keep an active search across the switch, preserving advanced filters;
+      // otherwise browse the selected virtual view.
       if (client && (!isFilterEmpty(searchFilters) || searchQuery)) {
         useEmailStore.setState({ isUnifiedView: true, unifiedRole: role, crossView: null });
         if (!isFilterEmpty(searchFilters)) {
@@ -2028,8 +2032,8 @@ export default function Home() {
       }
 
       const populated = await buildPopulatedUnifiedAccounts();
-      // Keep an active search across the switch and re-run it in this view
-      // (mirrors normal mailboxes), preserving advanced filters; otherwise browse.
+      // Keep an active search across the switch, preserving advanced filters;
+      // otherwise browse the selected virtual view.
       if (client && (!isFilterEmpty(searchFilters) || searchQuery)) {
         useEmailStore.setState({ isUnifiedView: true, crossView: view, unifiedRole: null });
         if (!isFilterEmpty(searchFilters)) {
@@ -2049,7 +2053,11 @@ export default function Home() {
     }
     setScheduledView(false);
 
+    const hasActiveSearch = Boolean(searchQuery) || !isFilterEmpty(searchFilters);
     selectMailbox(mailboxId);
+    if (globalSearchEnabled && hasActiveSearch) {
+      setSearchFilters({ mailboxId });
+    }
     selectEmail(null); // Clear selected email when switching mailboxes
 
     // On mobile, close sidebar and go to list view
@@ -2064,10 +2072,8 @@ export default function Home() {
     }
 
     if (client) {
-      // If there's an active search, re-run it in the new mailbox. Advanced
-      // filters must go through advancedSearch (which also includes the text
-      // query) — falling back to fetchEmails would silently drop them while
-      // the UI still shows them as active (#553).
+      // If there's an active search, re-run it after the folder switch.
+      // advancedSearch preserves its configured scope, text query, and filters (#553).
       if (!isFilterEmpty(searchFilters)) {
         await advancedSearch(client);
       } else if (searchQuery) {
@@ -2094,7 +2100,11 @@ export default function Home() {
     }
 
     if (client) {
-      await fetchEmails(client);
+      if (searchQuery || !isFilterEmpty(searchFilters)) {
+        await advancedSearch(client);
+      } else {
+        await fetchEmails(client);
+      }
     }
   };
 
@@ -2374,7 +2384,7 @@ export default function Home() {
   const handleSearch = async (query: string) => {
     if (!client) return;
     setSearchQuery(query);
-    if (!isFilterEmpty(searchFilters)) {
+    if (selectedKeyword || !isFilterEmpty(searchFilters)) {
       await advancedSearch(client);
     } else {
       await searchEmails(client, query);
@@ -3196,15 +3206,15 @@ export default function Home() {
                         />
                       </div>
 
-                      {/* Folder selector */}
+                      {/* Global search exposes All folders; otherwise the open folder is the default scope. */}
                       <div>
                         <label className="text-xs text-muted-foreground mb-1 block">{t("advanced_search.folder")}</label>
                         <select
-                          value={selectedMailbox || ""}
-                          onChange={(e) => { handleMailboxSelect(e.target.value); }}
+                          value={globalSearchEnabled ? searchFilters.mailboxId : searchFilters.mailboxId || selectedMailbox}
+                          onChange={(e) => { setSearchFilters({ mailboxId: e.target.value }); handleAdvancedSearch(); }}
                           className="w-full h-8 text-sm rounded-md border border-input bg-background px-3 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
                         >
-                          <option value="">{t("advanced_search.all_folders")}</option>
+                          {globalSearchEnabled && <option value="">{t("advanced_search.all_folders")}</option>}
                           {mailboxes.map((mb) => (
                             <option key={mb.id} value={mb.id}>
                               {mb.name}
@@ -3244,7 +3254,7 @@ export default function Home() {
                 {activeHasMore
                   ? t("advanced_search.results_found_more", { count: activeEmails.length })
                   : t("advanced_search.results_found", { count: activeEmails.length })}
-                {globalSearchEnabled && " (global)"}
+                {globalSearchEnabled && !searchFilters.mailboxId && " (global)"}
               </div>
             )}
 
